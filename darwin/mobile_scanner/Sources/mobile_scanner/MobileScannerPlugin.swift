@@ -149,6 +149,7 @@ public class MobileScannerPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
     }
     
     var nextScanTime = 0.0
+    var tileGrid = 0
     var imagesCurrentlyBeingProcessed = false
     
     // Gets called when a new image is added to the buffer
@@ -189,6 +190,11 @@ public class MobileScannerPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
                 }
                 
                 let imageRequestHandler = VNImageRequestHandler(cgImage: currentImage)
+
+                if self.tileGrid > 1 && self.scanWindow == nil {
+                    self.detectTiled(imageRequestHandler: imageRequestHandler, image: currentImage)
+                    return
+                }
                 
                 do {
                     let barcodeRequest: VNDetectBarcodesRequest = VNDetectBarcodesRequest(completionHandler: { [weak self] (request, error) in
@@ -279,6 +285,67 @@ public class MobileScannerPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
         }
     }
     
+    private func detectTiled(imageRequestHandler: VNImageRequestHandler, image: CGImage) {
+        defer { imagesCurrentlyBeingProcessed = false }
+        let grid = tileGrid
+        let side = 2.0 / Double(grid + 1)
+        var regions: [CGRect] = [CGRect(x: 0, y: 0, width: 1, height: 1)]
+        for row in 0..<grid {
+            for column in 0..<grid {
+                regions.append(CGRect(x: Double(column) * side / 2, y: Double(row) * side / 2, width: side, height: side))
+            }
+        }
+        let requests: [VNDetectBarcodesRequest] = regions.map { region in
+            let request = VNDetectBarcodesRequest()
+            if !symbologies.isEmpty {
+                request.symbologies = symbologies
+            }
+            request.regionOfInterest = region
+            return request
+        }
+        do {
+            try imageRequestHandler.perform(requests)
+        } catch let error {
+            DispatchQueue.main.async {
+                self.sink?(FlutterError(code: MobileScannerErrorCodes.BARCODE_ERROR, message: error.localizedDescription, details: nil))
+            }
+            return
+        }
+        var seen = Set<String>()
+        var data: [[String: Any?]] = []
+        for (request, region) in zip(requests, regions) {
+            for observation in request.results ?? [] {
+                let key = observation.payloadStringValue ?? observation.uuid.uuidString
+                if seen.insert(key).inserted {
+                    data.append(observation.toMap(imageWidth: image.width, imageHeight: image.height, scanWindow: region))
+                }
+            }
+        }
+        if data.isEmpty {
+            return
+        }
+        var bytes: FlutterStandardTypedData? = nil
+        if MobileScannerPlugin.returnImage, let imageBytes = image.jpegData(compressionQuality: 0.8) {
+            bytes = FlutterStandardTypedData(bytes: imageBytes)
+        }
+        DispatchQueue.main.async {
+#if os(iOS)
+            let imageData: [String: Any?] = [
+                "bytes": bytes,
+                "width": Double(min(image.width, image.height)),
+                "height": Double(max(image.width, image.height)),
+            ]
+#else
+            let imageData: [String: Any?] = [
+                "bytes": bytes,
+                "width": Double(image.width),
+                "height": Double(image.height),
+            ]
+#endif
+            self.sink?(["name": "barcode", "image": imageData, "data": data])
+        }
+    }
+
     func checkPermission(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
         if #available(iOS 12.0, macOS 10.14, *) {
             let status = AVCaptureDevice.authorizationStatus(for: .video)
@@ -384,6 +451,8 @@ public class MobileScannerPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
         MobileScannerPlugin.returnImage = argReader.bool(key: "returnImage") ?? false
 
         timeoutSeconds = Double(timeoutMs) / 1000.0
+        tileGrid = argReader.int(key: "tileGrid") ?? 0
+        let cameraResolution = (call.arguments as? [String: Any])?["cameraResolution"] as? [Int]
         detectionSpeed = DetectionSpeed(rawValue: speed)!
 
         // Set the camera to use. In macOS only a front camera is available.
@@ -443,7 +512,12 @@ public class MobileScannerPlugin: NSObject, FlutterPlugin, FlutterStreamHandler,
                 message: error.localizedDescription, details: nil))
             return
         }
-        captureSession!.sessionPreset = AVCaptureSession.Preset.high
+        let wantsUltraHighDefinition = (cameraResolution.flatMap { $0.max() } ?? 0) >= 3840
+        if wantsUltraHighDefinition && captureSession!.canSetSessionPreset(.hd4K3840x2160) {
+            captureSession!.sessionPreset = .hd4K3840x2160
+        } else {
+            captureSession!.sessionPreset = .high
+        }
 
         let videoOutput = AVCaptureVideoDataOutput()
 

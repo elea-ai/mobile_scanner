@@ -28,6 +28,7 @@ class MobileScannerController extends ValueNotifier<MobileScannerState> {
   MobileScannerController({
     this.autoStart = true,
     this.cameraResolution,
+    this.tileGrid = 0,
     this.lensType = CameraLensType.any,
     this.detectionSpeed = DetectionSpeed.normal,
     int detectionTimeoutMs = 250,
@@ -62,8 +63,23 @@ class MobileScannerController extends ValueNotifier<MobileScannerState> {
   /// When the camera orientation changes,
   /// the resolution will be flipped to match the new dimensions of the display.
   ///
-  /// Currently only supported on Android.
+  /// Supported on Android. On iOS and macOS, a resolution of 3840 pixels or
+  /// more on its longer side selects the 4K session preset where the camera
+  /// supports it; otherwise the high preset is used.
   final Size? cameraResolution;
+
+  /// Splits each analyzed frame into a grid of overlapping tiles and runs the
+  /// barcode detector on every tile in addition to the full frame.
+  ///
+  /// Barcode detectors downscale large frames before analyzing them, so small
+  /// codes in a wide field of view are lost. Each tile spans `2 / (tileGrid + 1)`
+  /// of the frame and neighbouring tiles overlap by half a tile, so every code
+  /// smaller than half a tile lies wholly within one tile.
+  ///
+  /// A value of 0 or 1 disables tiling. Ignored while a scan window is set.
+  ///
+  /// Currently only supported on iOS and macOS.
+  final int tileGrid;
 
   /// Automatically start the scanner on initialization.
   final bool autoStart;
@@ -472,6 +488,7 @@ class MobileScannerController extends ValueNotifier<MobileScannerState> {
       cameraDirection: cameraDirection ?? facing,
       cameraLensType: cameraLensType ?? lensType,
       cameraResolution: cameraResolution,
+      tileGrid: tileGrid,
       detectionSpeed: detectionSpeed,
       detectionTimeoutMs: detectionTimeoutMs,
       formats: formats,

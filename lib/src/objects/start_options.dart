@@ -20,7 +20,11 @@ class StartOptions {
     required this.invertImage,
     required this.autoZoom,
     required this.initialZoom,
+    this.tileGrid = 0,
   });
+
+  /// The tile grid for the barcode detector.
+  final int tileGrid;
 
   /// The direction for the camera.
   final CameraFacing cameraDirection;
@@ -87,6 +91,7 @@ class StartOptions {
       'invertImage': invertImage,
       'autoZoom': autoZoom,
       'initialZoom': initialZoom,
+      'tileGrid': tileGrid,
     };
   }
 }
